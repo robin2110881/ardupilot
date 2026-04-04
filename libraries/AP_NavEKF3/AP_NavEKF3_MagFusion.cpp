@@ -230,6 +230,36 @@ void NavEKF3_core::alignYawAngle(const yaw_elements &yawAngData)
     GCS_SEND_TEXT(MAV_SEVERITY_INFO, "EKF3 IMU%u yaw aligned",(unsigned)imu_index);
 }
 
+bool NavEKF3_core::can_set_yaw_from_external_command() const
+{
+    return statesInitialised && onGround && !motorsArmed && !dal.get_takeoff_expected();
+}
+
+void NavEKF3_core::set_yaw_from_external_command(float yaw_rad, float yaw_variance, uint32_t timeStamp_ms)
+{
+    // Use local EKF time for freshness bookkeeping; external timebases may differ.
+    (void)timeStamp_ms;
+
+    // Caller ensures command is allowed for all active cores before applying.
+    rotationOrder order;
+    bestRotationOrder(order);
+
+    // Keep the same lower bound used by other yaw alignment paths.
+    const ftype variance = MAX(yaw_variance, sq(radians(10.0f)));
+    const ftype yaw = wrap_PI(yaw_rad);
+    resetQuatStateYawOnly(yaw, variance, order);
+
+    // Keep synthetic/static yaw fusion aligned with the commanded heading
+    // when operating without a continuous yaw sensor.
+    yawAngDataStatic.yawAng = yaw;
+    yawAngDataStatic.yawAngErr = sqrtF(variance);
+    yawAngDataStatic.order = order;
+    yawAngDataStatic.time_ms = imuSampleTime_ms;
+
+    lastSynthYawTime_ms = imuSampleTime_ms;
+    recordYawResetsCompleted();
+}
+
 /********************************************************
 *                   FUSE MEASURED_DATA                  *
 ********************************************************/

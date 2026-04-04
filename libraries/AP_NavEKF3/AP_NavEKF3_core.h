@@ -337,6 +337,12 @@ public:
     */
     void writeEulerYawAngle(float yawAngle, float yawAngleErr, uint32_t timeStamp_ms, uint8_t type);
 
+    // true if a one-shot external yaw alignment command can be accepted now
+    bool can_set_yaw_from_external_command() const;
+
+    // apply a one-shot external yaw alignment command
+    void set_yaw_from_external_command(float yaw_rad, float yaw_variance, uint32_t timeStamp_ms);
+
     /*
     * Write position and quaternion data from an external navigation system
     *

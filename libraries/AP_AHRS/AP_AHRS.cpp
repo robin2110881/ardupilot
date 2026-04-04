@@ -1580,6 +1580,14 @@ bool AP_AHRS::handle_external_position_estimate(const Location &loc, float pos_a
 }
 #endif
 
+bool AP_AHRS::handle_external_yaw_align(float yaw_rad, float yaw_variance, uint32_t timestamp_ms)
+{
+#if HAL_NAVEKF3_AVAILABLE
+    return EKF3.setYawFromExternalCommand(yaw_rad, yaw_variance, timestamp_ms);
+#endif
+    return false;
+}
+
 // return true if inertial navigation is active
 bool AP_AHRS::have_inertial_nav(void) const
 {

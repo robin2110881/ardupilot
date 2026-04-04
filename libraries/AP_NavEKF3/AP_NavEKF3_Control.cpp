@@ -786,7 +786,7 @@ void  NavEKF3_core::updateFilterStatus(void)
     bool someVertRefData = (!velTimeout && (useGpsVertVel || useExtNavVel)) || !hgtTimeout;
     bool someHorizRefData = !(velTimeout && posTimeout && tasTimeout && dragTimeout) || doingFlowNav || doingBodyVelNav;
     // Declare ekf-gsf 5 state as a valid yaw alignement source
-    bool filterHealthy = healthy() && tiltAlignComplete && (yawAlignComplete || (!use_compass() && ((PV_AidingMode != AID_ABSOLUTE) || frontend->sources.gsf_from_extnav_and_flow_enabled())));
+    bool filterHealthy = healthy() && tiltAlignComplete && (yawAlignComplete || (!use_compass() && (PV_AidingMode != AID_ABSOLUTE)) ); //|| frontend->sources.gsf_from_extnav_and_flow_enabled()))); was used but this caused problem if the drone wasn't facing north on first takeoff
 
     // If GPS height usage is specified, height is considered to be inaccurate until the GPS passes all checks
     bool hgtNotAccurate = (frontend->sources.getPosZSource(core_index) == AP_NavEKF_Source::SourceZ::GPS) && !validOrigin;

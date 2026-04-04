@@ -4856,6 +4856,9 @@ void GCS_MAVLINK::send_sim_state() const
 #endif
 
 #if AP_AHRS_ENABLED
+// Defined here for testing but should be moved to the mavlink ardupilotmega message definition
+static constexpr MAV_CMD AP_MAV_CMD_EXTERNAL_YAW_ALIGN = static_cast<MAV_CMD>(43006);
+
 MAV_RESULT GCS_MAVLINK::handle_command_do_set_global_origin(const mavlink_command_int_t &packet)
 {
     Location global_origin;
@@ -5591,6 +5594,37 @@ MAV_RESULT GCS_MAVLINK::handle_command_int_external_wind_estimate(const mavlink_
 }
 #endif // AP_AHRS_EXTERNAL_WIND_ESTIMATE_ENABLED
 
+#if AP_AHRS_ENABLED
+MAV_RESULT GCS_MAVLINK::handle_command_int_external_yaw_align(const mavlink_command_int_t &packet)
+{
+    if (!isfinite(packet.param1)) {
+        return MAV_RESULT_DENIED;
+    }
+
+    const float yaw_rad = wrap_PI(packet.param1);
+
+    // param2 is interpreted as yaw variance in rad^2 (1-sigma variance).
+    // Never accept a confidence tighter than 10 degrees (1-sigma).
+    const float min_variance = sq(radians(10.0f));
+    float yaw_variance = packet.param2;
+    if (!isfinite(yaw_variance) || yaw_variance <= 0.0f) {
+        yaw_variance = min_variance;
+    }
+    yaw_variance = MAX(yaw_variance, min_variance);
+
+    if (!AP::ahrs().handle_external_yaw_align(yaw_rad, yaw_variance, AP_HAL::millis())) {
+        return MAV_RESULT_FAILED;
+    }
+
+#if HAL_LOGGING_ENABLED
+    AP::logger().Write_Event(LogEvent::EKF_YAW_RESET);
+#endif
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "EKF yaw align via COMMAND_INT");
+
+    return MAV_RESULT_ACCEPTED;
+}
+#endif // AP_AHRS_ENABLED
+
 MAV_RESULT GCS_MAVLINK::handle_command_do_set_roi(const mavlink_command_int_t &packet)
 {
     // be aware that this method is called for both MAV_CMD_DO_SET_ROI
@@ -5797,6 +5831,10 @@ MAV_RESULT GCS_MAVLINK::handle_command_int_packet(const mavlink_command_int_t &p
 #if AP_AHRS_EXTERNAL_WIND_ESTIMATE_ENABLED
     case MAV_CMD_EXTERNAL_WIND_ESTIMATE:
         return handle_command_int_external_wind_estimate(packet);
+#endif
+#if AP_AHRS_ENABLED
+    case AP_MAV_CMD_EXTERNAL_YAW_ALIGN:
+        return handle_command_int_external_yaw_align(packet);
 #endif
 #if AP_ARMING_ENABLED
     case MAV_CMD_COMPONENT_ARM_DISARM:

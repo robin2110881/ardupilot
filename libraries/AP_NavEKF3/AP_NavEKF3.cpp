@@ -1657,6 +1657,25 @@ void NavEKF3::writeEulerYawAngle(float yawAngle, float yawAngleErr, uint32_t tim
     }
 }
 
+bool NavEKF3::setYawFromExternalCommand(float yaw_rad, float yaw_variance, uint32_t timeStamp_ms)
+{
+    if (!core) {
+        return false;
+    }
+
+    for (uint8_t i = 0; i < num_cores; i++) {
+        if (!core[i].can_set_yaw_from_external_command()) {
+            return false;
+        }
+    }
+
+    for (uint8_t i = 0; i < num_cores; i++) {
+        core[i].set_yaw_from_external_command(yaw_rad, yaw_variance, timeStamp_ms);
+    }
+
+    return true;
+}
+
 /*
  * Write position and quaternion data from an external navigation system
  *

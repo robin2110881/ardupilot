@@ -270,6 +270,10 @@ public:
     bool handle_external_position_estimate(const Location &loc, float pos_accuracy, uint32_t timestamp_);
 #endif
 
+    // Apply a one-shot yaw alignment using an externally supplied yaw and variance.
+    // Returns true if the alignment request was accepted by the active EKF backend.
+    bool handle_external_yaw_align(float yaw_rad, float yaw_variance, uint32_t timestamp_ms);
+
     // returns the inertial navigation origin in lat/lon/alt
     bool get_origin(Location &ret) const WARN_IF_UNUSED;
 

@@ -243,6 +243,11 @@ public:
     */
     void writeEulerYawAngle(float yawAngle, float yawAngleErr, uint32_t timeStamp_ms, uint8_t type);
 
+    // Apply a one-shot yaw alignment from an external command.
+    // yaw_rad is the yaw angle in radians and yaw_variance is the 1-sigma variance in rad^2.
+    // Returns true when accepted and applied to all active EKF cores.
+    bool setYawFromExternalCommand(float yaw_rad, float yaw_variance, uint32_t timeStamp_ms);
+
     /*
      * Write position and quaternion data from an external navigation system
      *
