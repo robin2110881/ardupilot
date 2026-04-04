@@ -114,6 +114,13 @@ const AP_Param::GroupInfo AP_VisualOdom::var_info[] = {
     // @User: Advanced
     AP_GROUPINFO("_QUAL_MIN", 8, AP_VisualOdom, _quality_min, 0),
 
+    // @Param: _OPTION
+    // @DisplayName: Visual odometry options
+    // @Description: Visual odometry options
+    // @Bitmask: 0:Drop attitude from MAV vision pose messages
+    // @User: Advanced
+    AP_GROUPINFO("_OPTION", 9, AP_VisualOdom, _option, 0),
+
     AP_GROUPEND
 };
 

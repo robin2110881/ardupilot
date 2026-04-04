@@ -19,6 +19,8 @@
 
 #include "AP_VisualOdom_MAV.h"
 
+#include <cmath>
+
 #include <AP_HAL/AP_HAL.h>
 #include <AP_AHRS/AP_AHRS.h>
 #include <AP_Logger/AP_Logger.h>
@@ -48,7 +50,8 @@ void AP_VisualOdom_MAV::handle_pose_estimate(uint64_t remote_time_us, uint32_t t
     // send attitude and position to EKF if quality OK
     bool consume = (_quality >= _frontend.get_quality_min());
     if (consume) {
-        AP::ahrs().writeExtNavData(pos, attitude, posErr, angErr, time_ms, _frontend.get_delay_ms(), get_reset_timestamp_ms(reset_counter));
+        const float angErr_for_ekf = _frontend.option_is_set(AP_VisualOdom::Option::DROP_ATTITUDE) ? NAN : angErr;
+        AP::ahrs().writeExtNavData(pos, attitude, posErr, angErr_for_ekf, time_ms, _frontend.get_delay_ms(), get_reset_timestamp_ms(reset_counter));
     }
 
     // calculate euler orientation for logging

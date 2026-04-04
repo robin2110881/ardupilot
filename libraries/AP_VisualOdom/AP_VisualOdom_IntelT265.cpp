@@ -19,6 +19,8 @@
 
 #include "AP_VisualOdom_IntelT265.h"
 
+#include <limits>
+
 #include <AP_HAL/AP_HAL.h>
 #include <AP_AHRS/AP_AHRS.h>
 #include <GCS_MAVLink/GCS.h>
@@ -66,8 +68,9 @@ void AP_VisualOdom_IntelT265::handle_pose_estimate(uint64_t remote_time_us, uint
     // check for recent position reset
     bool consume = should_consume_sensor_data(true, reset_counter) && (_quality >= _frontend.get_quality_min());
     if (consume) {
+        const float angErr_for_ekf = _frontend.option_is_set(AP_VisualOdom::Option::DROP_ATTITUDE) ? std::numeric_limits<float>::quiet_NaN() : angErr;
         // send attitude and position to EKF
-        AP::ahrs().writeExtNavData(pos, att, posErr, angErr, time_ms, _frontend.get_delay_ms(), get_reset_timestamp_ms(reset_counter));
+        AP::ahrs().writeExtNavData(pos, att, posErr, angErr_for_ekf, time_ms, _frontend.get_delay_ms(), get_reset_timestamp_ms(reset_counter));
     }
 
     // calculate euler orientation for logging
@@ -222,6 +225,11 @@ bool AP_VisualOdom_IntelT265::pre_arm_check(char *failure_msg, uint8_t failure_m
     if (_error_orientation) {
         hal.util->snprintf(failure_msg, failure_msg_len, "check VISO_ORIENT parameter");
         return false;
+    }
+
+    // Optional path: allow position/velocity-only visual odometry without enforcing attitude agreement checks.
+    if (_frontend.option_is_set(AP_VisualOdom::Option::DROP_ATTITUDE)) {
+        return true;
     }
 
     // get ahrs attitude
