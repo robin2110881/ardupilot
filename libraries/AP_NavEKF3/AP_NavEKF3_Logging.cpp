@@ -447,10 +447,19 @@ void NavEKF3_core::Log_Write_Timing(uint64_t time_us)
 
 void NavEKF3_core::Log_Write_GSF(uint64_t time_us)
 {
-    if (yawEstimator == nullptr) {
+    if (frontend->sources.gsf_from_extnav_and_flow_enabled()) {
+        if (yawEstimator5 == nullptr) {
+            return;
+        }
+        yawEstimator5->Log_Write(time_us, LOG_XKY0_MSG, LOG_XKY1_MSG, LOG_XKY2_MSG, DAL_CORE(core_index));
         return;
     }
-    yawEstimator->Log_Write(time_us, LOG_XKY0_MSG, LOG_XKY1_MSG, DAL_CORE(core_index));
+    else {   
+        if (yawEstimator == nullptr) {
+            return;
+        }
+        yawEstimator->Log_Write(time_us, LOG_XKY0_MSG, LOG_XKY1_MSG, DAL_CORE(core_index));
+    }
 }
 
 #endif  // HAL_LOGGING_ENABLED

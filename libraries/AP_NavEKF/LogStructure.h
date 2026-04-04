@@ -67,6 +67,36 @@ struct PACKED log_KY1 {
     float ive4;
 };
 
+// @LoggerMessage: XKY2,NKY2
+// @Description: EKF Yaw Estimator Position Innovations
+// @Field: TimeUS: Time since system startup
+// @Field: C: EKF core this data is for
+// @Field: IPN0: North position innovation from individual EKF filter 0 (m)
+// @Field: IPN1: North position innovation from individual EKF filter 1 (m)
+// @Field: IPN2: North position innovation from individual EKF filter 2 (m)
+// @Field: IPN3: North position innovation from individual EKF filter 3 (m)
+// @Field: IPN4: North position innovation from individual EKF filter 4 (m)
+// @Field: IPE0: East position innovation from individual EKF filter 0 (m)
+// @Field: IPE1: East position innovation from individual EKF filter 1 (m)
+// @Field: IPE2: East position innovation from individual EKF filter 2 (m)
+// @Field: IPE3: East position innovation from individual EKF filter 3 (m)
+// @Field: IPE4: East position innovation from individual EKF filter 4 (m)
+struct PACKED log_KY2 {
+        LOG_PACKET_HEADER;
+        uint64_t time_us;
+        uint8_t core;
+        float ipn0;
+        float ipn1;
+        float ipn2;
+        float ipn3;
+        float ipn4;
+        float ipe0;
+        float ipe1;
+        float ipe2;
+        float ipe3;
+        float ipe4;
+};
+
 #define KY0_FMT "QBffffffffffff"
 #define KY0_LABELS "TimeUS,C,YC,YCS,Y0,Y1,Y2,Y3,Y4,W0,W1,W2,W3,W4"
 #define KY0_UNITS "s#hdhhhhh-----"
@@ -77,12 +107,21 @@ struct PACKED log_KY1 {
 #define KY1_UNITS "s#nnnnnnnnnn"
 #define KY1_MULTS "F-0000000000"
 
+#define KY2_FMT "QBffffffffff"
+#define KY2_LABELS "TimeUS,C,IPN0,IPN1,IPN2,IPN3,IPN4,IPE0,IPE1,IPE2,IPE3,IPE4"
+#define KY2_UNITS "s#mmmmmmmmmm"
+#define KY2_MULTS "F-0000000000"
+
 #define LOG_STRUCTURE_FROM_NAVEKF                                       \
     { LOG_XKY0_MSG, sizeof(log_KY0),                                    \
             "XKY0", KY0_FMT, KY0_LABELS, KY0_UNITS, KY0_MULTS, true },      \
     { LOG_XKY1_MSG, sizeof(log_KY1),                                    \
             "XKY1", KY1_FMT, KY1_LABELS, KY1_UNITS, KY1_MULTS , true },     \
+    { LOG_XKY2_MSG, sizeof(log_KY2),                                    \
+            "XKY2", KY2_FMT, KY2_LABELS, KY2_UNITS, KY2_MULTS , true },     \
     { LOG_NKY0_MSG, sizeof(log_KY0),                                    \
             "NKY0", KY0_FMT, KY0_LABELS, KY0_UNITS, KY0_MULTS, true },      \
     { LOG_NKY1_MSG, sizeof(log_KY1),                                    \
-            "NKY1", KY1_FMT, KY1_LABELS, KY1_UNITS, KY1_MULTS , true },
+            "NKY1", KY1_FMT, KY1_LABELS, KY1_UNITS, KY1_MULTS , true },     \
+    { LOG_NKY2_MSG, sizeof(log_KY2),                                    \
+            "NKY2", KY2_FMT, KY2_LABELS, KY2_UNITS, KY2_MULTS , true },

@@ -3688,6 +3688,35 @@ const EKFGSF_yaw *AP_AHRS::get_yaw_estimator(void) const
     return nullptr;
 }
 
+const EKFGSF_yaw_5state *AP_AHRS::get_yaw_estimator5(void) const
+{
+    switch (active_EKF_type()) {
+#if HAL_NAVEKF3_AVAILABLE
+    case EKFType::THREE:
+        return EKF3.get_yawEstimator5();
+#endif
+#if AP_AHRS_DCM_ENABLED
+    case EKFType::DCM:
+#if HAL_NAVEKF3_AVAILABLE
+        return EKF3.get_yawEstimator5();
+#else
+        return nullptr;
+#endif
+#endif
+#if HAL_NAVEKF2_AVAILABLE
+    case EKFType::TWO:
+#endif
+#if AP_AHRS_SIM_ENABLED
+    case EKFType::SIM:
+#endif
+#if AP_AHRS_EXTERNAL_ENABLED
+    case EKFType::EXTERNAL:
+#endif
+        return nullptr;
+    }
+    return nullptr;
+}
+
 // get current location estimate
 bool AP_AHRS::get_location(Location &loc) const
 {

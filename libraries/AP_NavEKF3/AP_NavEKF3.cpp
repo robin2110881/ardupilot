@@ -2180,3 +2180,11 @@ const EKFGSF_yaw *NavEKF3::get_yawEstimator(void) const
     }
     return nullptr;
 }
+
+const EKFGSF_yaw_5state *NavEKF3::get_yawEstimator5(void) const
+{
+    if (core) {
+        return core[primary].get_yawEstimator5();
+    }
+    return nullptr;
+}

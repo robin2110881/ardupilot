@@ -166,18 +166,38 @@ bool NavEKF3_core::setup_core(uint8_t _imu_index, uint8_t _core_index)
     }
 #endif
  
-    if ((yawEstimator == nullptr) && (frontend->_gsfRunMask & (1U<<core_index))) {
-        // check if there is enough memory to create the EKF-GSF object
-        if (dal.available_memory() < sizeof(EKFGSF_yaw) + 1024) {
-            GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "EKF3 IMU%u GSF: not enough memory",(unsigned)imu_index);
-            return false;
-        }
+    if (frontend->_gsfRunMask & (1U<<core_index)) {
+        // allocate the selected EKF-GSF yaw estimator implementation
+        if (!frontend->sources.gsf_from_extnav_and_flow_enabled()) {
+            if (yawEstimator == nullptr) {
+                // check if there is enough memory to create the EKF-GSF object
+                if (dal.available_memory() < sizeof(EKFGSF_yaw) + 1024) {
+                    GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "EKF3 IMU%u GSF: not enough memory",(unsigned)imu_index);
+                    return false;
+                }
 
-        // try to instantiate
-        yawEstimator = NEW_NOTHROW EKFGSF_yaw();
-        if (yawEstimator == nullptr) {
-            GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "EKF3 IMU%uGSF: allocation failed",(unsigned)imu_index);
-            return false;
+                // try to instantiate
+                yawEstimator = NEW_NOTHROW EKFGSF_yaw();
+                if (yawEstimator == nullptr) {
+                    GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "EKF3 IMU%uGSF: allocation failed",(unsigned)imu_index);
+                    return false;
+                }
+            }
+        } else {
+            if (yawEstimator5 == nullptr) {
+                // check if there is enough memory to create the EKF-GSF5 object
+                if (dal.available_memory() < sizeof(EKFGSF_yaw_5state) + 1024) {
+                    GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "EKF3 IMU%u GSF5: not enough memory",(unsigned)imu_index);
+                    return false;
+                }
+
+                // try to instantiate
+                yawEstimator5 = NEW_NOTHROW EKFGSF_yaw_5state();
+                if (yawEstimator5 == nullptr) {
+                    GCS_SEND_TEXT(MAV_SEVERITY_CRITICAL, "EKF3 IMU%u GSF5: allocation failed",(unsigned)imu_index);
+                    return false;
+                }
+            }
         }
     }
 
@@ -290,6 +310,12 @@ void NavEKF3_core::InitialiseVariables()
     tiltAlignComplete = false;
     yawAlignComplete = false;
     yawAlignGpsValidCount = 0;
+#if EK3_FEATURE_EXTERNAL_NAV
+    extNavCourseVelFilt.zero();
+    extNavCourseLastPosNE.zero();
+    extNavCourseLastTime_ms = 0;
+    extNavCourseFiltValid = false;
+#endif
     have_table_earth_field = false;
     stateIndexLim = 23;
     last_gps_idx = 0;
@@ -659,7 +685,7 @@ void NavEKF3_core::UpdateFilter(bool predict)
         // Update states using  magnetometer or external yaw sensor data
         SelectMagFusion();
 
-        // Update states using GPS and altimeter data
+        // Update states using GPS and altimeter data or External Nav data if selected
         SelectVelPosFusion();
 
         // Run the GPS velocity correction step for the GSF yaw estimator algorithm

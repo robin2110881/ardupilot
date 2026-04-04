@@ -13,7 +13,8 @@
     LOG_NKQ_MSG,   \
     LOG_NKT_MSG,   \
     LOG_NKY0_MSG,  \
-    LOG_NKY1_MSG
+    LOG_NKY1_MSG,  \
+    LOG_NKY2_MSG
 
 
 // @LoggerMessage: NKF0

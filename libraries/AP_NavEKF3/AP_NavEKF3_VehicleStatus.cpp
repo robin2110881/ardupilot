@@ -431,11 +431,44 @@ void NavEKF3_core::detectFlight()
     }
 
     // handle reset of counters used to control how many times we will try to reset the yaw to the EKF-GSF value per flight
-    if ((!prevOnGround && onGround) || !gpsSpdAccPass) {
+    const bool use_gsf5 = frontend->sources.gsf_from_extnav_and_flow_enabled();
+    if ((!prevOnGround && onGround) || (!use_gsf5 && !gpsSpdAccPass)) {
+        // TODO : add input accuracy for gsf5
         // disable filter bank
         EKFGSF_run_filterbank = false;
-    } else if (yawEstimator != nullptr && !EKFGSF_run_filterbank && (inFlight || dal.get_takeoff_expected()) && gpsSpdAccPass) {
-        // flying or about to fly so reset counters and enable filter bank when GPS is good
+    }
+
+    const bool have_estimator = use_gsf5 ? (yawEstimator5 != nullptr) : (yawEstimator != nullptr);
+    const bool flying_or_takeoff = (inFlight || dal.get_takeoff_expected());
+    // ISSUE : dal.get_takeoff_expected() remain active after landing, it is managed by other than ekf thus we could miss the tick we will thus use the state change wether than the state itself
+    bool aiding_ready = false;
+
+    if (use_gsf5) {
+        // TODO : use a form of accuracy check for gsf5 when available
+            aiding_ready |= gpsSpdAccPass;
+#if EK3_FEATURE_EXTERNAL_NAV
+        aiding_ready |= (frontend->sources.getPosXYSource(core_index) == AP_NavEKF_Source::SourceXY::EXTNAV) && extNavDataToFuse;
+#endif
+#if EK3_FEATURE_OPTFLOW_FUSION
+        aiding_ready |= frontend->sources.useVelXYSource(AP_NavEKF_Source::SourceXY::OPTFLOW, core_index) && ((imuSampleTime_ms - flowValidMeaTime_ms) < 1000);
+#endif
+    } 
+    else {
+        aiding_ready = gpsSpdAccPass;
+    }
+
+    bool should_enable = false;
+    if (have_estimator && !EKFGSF_run_filterbank && flying_or_takeoff && aiding_ready) {
+        if (!use_gsf5) {
+            // Keep legacy restart behaviour for the 3-state GSF.
+            should_enable = true;
+        } else {
+            // For the 5-state path, only trigger once per in-flight/takeoff transition.
+            should_enable = !prevInFlight;
+        }
+    }
+
+    if (should_enable) {
         EKFGSF_yaw_reset_ms = 0;
         EKFGSF_yaw_reset_request_ms = 0;
         EKFGSF_yaw_reset_count = 0;
@@ -443,12 +476,16 @@ void NavEKF3_core::detectFlight()
         EKFGSF_run_filterbank = true;
         Vector3f gyroBias;
         getGyroBias(gyroBias);
-        yawEstimator->setGyroBias(gyroBias);
+        if (use_gsf5) {
+            yawEstimator5->setGyroBias(gyroBias);
+        } else {
+            yawEstimator->setGyroBias(gyroBias);
+        }
     }
-
+    
     // store current on-ground  and in-air status for next time
     prevOnGround = onGround;
-    prevInFlight = inFlight;
+    prevInFlight = use_gsf5 ? flying_or_takeoff : inFlight;
 
 }
 

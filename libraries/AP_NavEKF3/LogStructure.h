@@ -19,7 +19,8 @@
     LOG_XKV1_MSG, \
     LOG_XKV2_MSG, \
     LOG_XKY0_MSG, \
-    LOG_XKY1_MSG
+    LOG_XKY1_MSG, \
+    LOG_XKY2_MSG
 
 // @LoggerMessage: XKF0
 // @Description: EKF3 beacon sensor diagnostics

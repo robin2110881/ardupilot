@@ -147,66 +147,77 @@ void NavEKF3_core::realignYawGPS(bool emergency_reset)
     Vector3F eulerAngles;
     stateStruct.quat.to_euler(eulerAngles.x, eulerAngles.y, eulerAngles.z);
 
-    if (gpsDataDelayed.vel.xy().length_squared() > sq(GPS_VEL_YAW_ALIGN_MIN_SPD)) {
-        // calculate course yaw angle
-        ftype velYaw = atan2F(stateStruct.velocity.y,stateStruct.velocity.x);
+    if (!frontend->sources.gsf_from_extnav_and_flow_enabled()) {
+        if (gpsDataDelayed.vel.xy().length_squared() > sq(GPS_VEL_YAW_ALIGN_MIN_SPD)) {
+            // calculate course yaw angle
+            ftype velYaw = atan2F(stateStruct.velocity.y,stateStruct.velocity.x);
 
-        // calculate course yaw angle from GPS velocity
-        ftype gpsYaw = atan2F(gpsDataDelayed.vel.y,gpsDataDelayed.vel.x);
+            // calculate course yaw angle from GPS velocity
+            ftype gpsYaw = atan2F(gpsDataDelayed.vel.y,gpsDataDelayed.vel.x);
 
-        // Check the yaw angles for consistency
-        ftype yawErr = MAX(fabsF(wrap_PI(gpsYaw - velYaw)),fabsF(wrap_PI(gpsYaw - eulerAngles.z)));
+            // Check the yaw angles for consistency
+            ftype yawErr = MAX(fabsF(wrap_PI(gpsYaw - velYaw)),fabsF(wrap_PI(gpsYaw - eulerAngles.z)));
 
-        // If the angles disagree by more than 45 degrees and GPS innovations are large or no previous yaw alignment, we declare the magnetic yaw as bad
-        bool badMagYaw = ((yawErr > 0.7854f) && (velTestRatio > 1.0f) && (PV_AidingMode == AID_ABSOLUTE)) || !yawAlignComplete;
+            // If the angles disagree by more than 45 degrees and GPS innovations are large or no previous yaw alignment, we declare the magnetic yaw as bad
+            bool badMagYaw = ((yawErr > 0.7854f) && (velTestRatio > 1.0f) && (PV_AidingMode == AID_ABSOLUTE)) || !yawAlignComplete;
 
-        // get yaw variance from GPS speed uncertainty
-        const ftype gpsVelAcc = fmaxF(gpsSpdAccuracy, ftype(frontend->_gpsHorizVelNoise));
-        const ftype gps_yaw_variance = sq(asinF(constrain_float(gpsVelAcc/gpsDataDelayed.vel.xy().length(), -1.0F, 1.0F)));
-        if (gps_yaw_variance < sq(radians(GPS_VEL_YAW_ALIGN_MAX_ANG_ERR))) {
-            yawAlignGpsValidCount++;
+            // get yaw variance from GPS speed uncertainty
+            const ftype gpsVelAcc = fmaxF(gpsSpdAccuracy, ftype(frontend->_gpsHorizVelNoise));
+            const ftype gps_yaw_variance = sq(asinF(constrain_float(gpsVelAcc/gpsDataDelayed.vel.xy().length(), -1.0F, 1.0F)));
+            if (gps_yaw_variance < sq(radians(GPS_VEL_YAW_ALIGN_MAX_ANG_ERR))) {
+                yawAlignGpsValidCount++;
+            } else {
+                yawAlignGpsValidCount = 0;
+            }
+
+            // correct yaw angle using GPS ground course if compass yaw bad
+            if (badMagYaw) {
+                // attempt to use EKF-GSF estimate if available as it is more robust to GPS glitches
+                // by default fly forward vehicles use ground course for initial yaw unless the GSF is explicitly selected as the yaw source
+                const bool useGSF = !assume_zero_sideslip() || (yaw_source_last == AP_NavEKF_Source::SourceYaw::GSF);
+                if (useGSF && EKFGSF_resetMainFilterYaw(emergency_reset)) {
+                    return;
+                }
+
+                if (yawAlignGpsValidCount >= GPS_VEL_YAW_ALIGN_COUNT_THRESHOLD) {
+                    yawAlignGpsValidCount = 0;
+                    // keep roll and pitch and reset yaw
+                    rotationOrder order;
+                    bestRotationOrder(order);
+                    resetQuatStateYawOnly(gpsYaw, gps_yaw_variance, order);
+
+                    // reset the velocity and position states as they will be inaccurate due to bad yaw
+                    ResetVelocity(resetDataSource::GPS);
+                    ResetPosition(resetDataSource::GPS);
+
+                    // send yaw alignment information to console
+                    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "EKF3 IMU%u yaw aligned to GPS velocity",(unsigned)imu_index);
+
+                    if (use_compass()) {
+                        // request a mag field reset which may enable us to use the magnetometer if the previous fault was due to bad initialisation
+                        magStateResetRequest = true;
+                        // clear the all sensors failed status so that the magnetometers sensors get a second chance now that we are flying
+                        allMagSensorsFailed = false;
+                    }
+                }
+            } else if (yawAlignGpsValidCount >= GPS_VEL_YAW_ALIGN_COUNT_THRESHOLD) {
+                    // There is no need to do a yaw reset
+                    yawAlignGpsValidCount = 0;
+                    recordYawResetsCompleted();
+            }
         } else {
             yawAlignGpsValidCount = 0;
         }
+        }
+    else if (frontend->sources.gsf_from_extnav_and_flow_enabled()) {
+            /* TODO : Maybe implement speed based on ext nav derivative */
 
-        // correct yaw angle using GPS ground course if compass yaw bad
-        if (badMagYaw) {
             // attempt to use EKF-GSF estimate if available as it is more robust to GPS glitches
-            // by default fly forward vehicles use ground course for initial yaw unless the GSF is explicitly selected as the yaw source
             const bool useGSF = !assume_zero_sideslip() || (yaw_source_last == AP_NavEKF_Source::SourceYaw::GSF);
             if (useGSF && EKFGSF_resetMainFilterYaw(emergency_reset)) {
                 return;
             }
-
-            if (yawAlignGpsValidCount >= GPS_VEL_YAW_ALIGN_COUNT_THRESHOLD) {
-                yawAlignGpsValidCount = 0;
-                // keep roll and pitch and reset yaw
-                rotationOrder order;
-                bestRotationOrder(order);
-                resetQuatStateYawOnly(gpsYaw, gps_yaw_variance, order);
-
-                // reset the velocity and position states as they will be inaccurate due to bad yaw
-                ResetVelocity(resetDataSource::GPS);
-                ResetPosition(resetDataSource::GPS);
-
-                // send yaw alignment information to console
-                GCS_SEND_TEXT(MAV_SEVERITY_INFO, "EKF3 IMU%u yaw aligned to GPS velocity",(unsigned)imu_index);
-
-                if (use_compass()) {
-                    // request a mag field reset which may enable us to use the magnetometer if the previous fault was due to bad initialisation
-                    magStateResetRequest = true;
-                    // clear the all sensors failed status so that the magnetometers sensors get a second chance now that we are flying
-                    allMagSensorsFailed = false;
-                }
-            }
-        } else if (yawAlignGpsValidCount >= GPS_VEL_YAW_ALIGN_COUNT_THRESHOLD) {
-                // There is no need to do a yaw reset
-                yawAlignGpsValidCount = 0;
-                recordYawResetsCompleted();
         }
-    } else {
-        yawAlignGpsValidCount = 0;
-    }
 }
 
 // align the yaw angle for the quaternion states to the given yaw angle which should be at the fusion horizon
@@ -252,7 +263,7 @@ void NavEKF3_core::SelectMagFusion()
          yaw_source_last != AP_NavEKF_Source::SourceYaw::GPS &&
          yaw_source_last != AP_NavEKF_Source::SourceYaw::GPS_COMPASS_FALLBACK &&
          yaw_source_last != AP_NavEKF_Source::SourceYaw::EXTNAV)) {
-
+        
         if ((!yawAlignComplete || yaw_source_reset) && ((yaw_source_last != AP_NavEKF_Source::SourceYaw::GSF) || (EKFGSF_yaw_valid_count >= GSF_YAW_VALID_HISTORY_THRESHOLD))) {
             realignYawGPS(false);
             yaw_source_reset = false;
@@ -1427,11 +1438,19 @@ bool NavEKF3_core::learnMagBiasFromGPS(void)
 bool NavEKF3_core::EKFGSF_resetMainFilterYaw(bool emergency_reset)
 {
     // Don't do a reset unless permitted by the EK3_GSF_USE_MASK and EK3_GSF_RUN_MASK parameter masks
-    if ((yawEstimator == nullptr)
-        || !(frontend->_gsfUseMask & (1U<<core_index))) {
-        return false;
-    };
-
+    if (!frontend->sources.gsf_from_extnav_and_flow_enabled()) {
+        if ((yawEstimator == nullptr)
+            || !(frontend->_gsfUseMask & (1U<<core_index))) {
+            return false;
+        };
+    } 
+    else {
+        if ((yawEstimator5 == nullptr)
+            || !(frontend->_gsfUseMask & (1U<<core_index))) {
+            return false;
+        };
+    }
+    
     // limit the number of emergency resets
     if (emergency_reset && (EKFGSF_yaw_reset_count >= frontend->_gsfResetMaxCount)) {
         return false;
@@ -1449,8 +1468,10 @@ bool NavEKF3_core::EKFGSF_resetMainFilterYaw(bool emergency_reset)
         EKFGSF_yaw_reset_ms = imuSampleTime_ms;
         EKFGSF_yaw_reset_count++;
 
-        if ((yaw_source_last == AP_NavEKF_Source::SourceYaw::GSF) ||
-            !use_compass() || (dal.compass().get_num_enabled() == 0)) {
+        if (yaw_source_last == AP_NavEKF_Source::SourceYaw::GSF){
+            GCS_SEND_TEXT(MAV_SEVERITY_INFO, "EKF3 IMU%u yaw aligned using GSF",(unsigned)imu_index);
+        } 
+        else if (!use_compass() || (dal.compass().get_num_enabled() == 0)){
             GCS_SEND_TEXT(MAV_SEVERITY_INFO, "EKF3 IMU%u yaw aligned using GPS",(unsigned)imu_index);
         } else {
             GCS_SEND_TEXT(MAV_SEVERITY_WARNING, "EKF3 IMU%u emergency yaw reset",(unsigned)imu_index);
@@ -1483,20 +1504,36 @@ bool NavEKF3_core::EKFGSF_resetMainFilterYaw(bool emergency_reset)
 // returns true on success and populates yaw (in radians) and yawVariance (rad^2)
 bool NavEKF3_core::EKFGSF_getYaw(ftype &yaw, ftype &yawVariance) const
 {
-    // return immediately if no yaw estimator
-    if (yawEstimator == nullptr) {
+    if (!frontend->sources.gsf_from_extnav_and_flow_enabled()) {
+        // return immediately if no yaw estimator
+        if (yawEstimator == nullptr) {
+            return false;
+        }
+
+        ftype velInnovLength;
+        if (yawEstimator->getYawData(yaw, yawVariance) &&
+            is_positive(yawVariance) &&
+            yawVariance < sq(radians(GSF_YAW_ACCURACY_THRESHOLD_DEG)) &&
+            (assume_zero_sideslip() || (yawEstimator->getVelInnovLength(velInnovLength) && velInnovLength < frontend->maxYawEstVelInnov))) {
+            return true;
+        }
+
         return false;
     }
+    else {
+        if (yawEstimator5 == nullptr) {
+            return false;
+        }
 
-    ftype velInnovLength;
-    if (yawEstimator->getYawData(yaw, yawVariance) &&
-        is_positive(yawVariance) &&
-        yawVariance < sq(radians(GSF_YAW_ACCURACY_THRESHOLD_DEG)) &&
-        (assume_zero_sideslip() || (yawEstimator->getVelInnovLength(velInnovLength) && velInnovLength < frontend->maxYawEstVelInnov))) {
-        return true;
+        ftype velInnovLength;
+        if (yawEstimator5->getYawData(yaw, yawVariance) &&
+            is_positive(yawVariance) &&
+            yawVariance < sq(radians(GSF_YAW_ACCURACY_THRESHOLD_DEG)) &&
+            (assume_zero_sideslip() || (yawEstimator5->getVelInnovLength(velInnovLength) && velInnovLength < frontend->maxYawEstVelInnov))) {
+            return true;
+        }
+        return false;
     }
-
-    return false;
 }
 
 void NavEKF3_core::resetQuatStateYawOnly(ftype yaw, ftype yawVariance, rotationOrder order)

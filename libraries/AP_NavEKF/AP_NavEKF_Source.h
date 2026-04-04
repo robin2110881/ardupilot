@@ -50,7 +50,8 @@ public:
         FUSE_ALL_VELOCITIES = (1 << 0),                 // fuse all velocities configured in source sets
         ALIGN_EXTNAV_POS_WHEN_USING_OPTFLOW = (1 << 1),  // align position of inactive sources to ahrs when using optical flow
         // reserved = (1 << 2),                          // reserved for future use
-        SRC_PER_CORE = (1 << 3)                         // use a separate source set for each core
+        SRC_PER_CORE = (1 << 3),                         // use a separate source set for each core
+        GSF_FROM_EXTNAV_AND_FLOW = (1 << 4)                      // when using GSF yaw source, use GPS velocity if not set, otherwise use external nav and optical flow
     };
 
     enum class SourceSetSelection : uint8_t {
@@ -118,6 +119,8 @@ public:
 
     // return true if ext nav is enabled on any source
     bool ext_nav_enabled(void) const;
+
+    bool gsf_from_extnav_and_flow_enabled(void) const { return option_is_set(SourceOptions::GSF_FROM_EXTNAV_AND_FLOW); }
 
     // return true if GPS yaw is enabled on any source
     bool gps_yaw_enabled(void) const;

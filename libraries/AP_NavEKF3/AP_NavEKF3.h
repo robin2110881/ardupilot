@@ -27,6 +27,7 @@
 
 class NavEKF3_core;
 class EKFGSF_yaw;
+class EKFGSF_yaw_5state;
 
 class NavEKF3 {
     friend class NavEKF3_core;
@@ -382,6 +383,7 @@ public:
 
     // get a yaw estimator instance
     const EKFGSF_yaw *get_yawEstimator(void) const;
+    const EKFGSF_yaw_5state *get_yawEstimator5(void) const;
 
 private:
     class AP_DAL &dal;

@@ -136,7 +136,7 @@ const AP_Param::GroupInfo AP_NavEKF_Source::var_info[] = {
     // @Param: _OPTIONS
     // @DisplayName: EKF Source Options
     // @Description: EKF Source Options. Bit 0: Fuse all velocity sources present in EK3_SRCx_VEL_. Bit 1: Align external navigation position when using optical flow. Bit 3: Use SRC per core. By default, EKF source selection is controlled via the EK3_SRC parameters, allowing only one source to be active at a time across all cores (switchable via MAVLink, Lua, or RC). Enabling this bit maps EKF core 1 to SRC1, core 2 to SRC2, etc., allowing each core to run independently with a dedicated source.
-    // @Bitmask: 0:FuseAllVelocities, 1:AlignExtNavPosWhenUsingOptFlow, 3: UsePerCoreEKFSources
+    // @Bitmask: 0:FuseAllVelocities, 1:AlignExtNavPosWhenUsingOptFlow, 3: UsePerCoreEKFSources, 4: GSFFromExtnavAndFlow
     // @User: Advanced
     AP_GROUPINFO("_OPTIONS", 16, AP_NavEKF_Source, _options, 0),
 
@@ -479,7 +479,13 @@ bool AP_NavEKF_Source::pre_arm_check(bool requires_position, char *failure_msg, 
             visualodom_required = true;
             break;
         case SourceYaw::GSF:
-            gps_required = true;
+            if (option_is_set(SourceOptions::GSF_FROM_EXTNAV_AND_FLOW)) {
+                visualodom_required = true;
+                optflow_required = true;
+            }
+            else {
+                gps_required = true;
+            }
             break;
         default:
             // invalid yaw value

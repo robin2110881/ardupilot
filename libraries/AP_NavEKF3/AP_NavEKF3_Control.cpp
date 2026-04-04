@@ -785,7 +785,8 @@ void  NavEKF3_core::updateFilterStatus(void)
     bool doingNormalGpsNav = !posTimeout && (PV_AidingMode == AID_ABSOLUTE);
     bool someVertRefData = (!velTimeout && (useGpsVertVel || useExtNavVel)) || !hgtTimeout;
     bool someHorizRefData = !(velTimeout && posTimeout && tasTimeout && dragTimeout) || doingFlowNav || doingBodyVelNav;
-    bool filterHealthy = healthy() && tiltAlignComplete && (yawAlignComplete || (!use_compass() && (PV_AidingMode != AID_ABSOLUTE)));
+    // Declare ekf-gsf 5 state as a valid yaw alignement source
+    bool filterHealthy = healthy() && tiltAlignComplete && (yawAlignComplete || (!use_compass() && ((PV_AidingMode != AID_ABSOLUTE) || frontend->sources.gsf_from_extnav_and_flow_enabled())));
 
     // If GPS height usage is specified, height is considered to be inaccurate until the GPS passes all checks
     bool hgtNotAccurate = (frontend->sources.getPosZSource(core_index) == AP_NavEKF_Source::SourceZ::GPS) && !validOrigin;
@@ -826,54 +827,173 @@ void  NavEKF3_core::updateFilterStatus(void)
 
 void NavEKF3_core::runYawEstimatorPrediction()
 {
-    // exit immediately if no yaw estimator
-    if (yawEstimator == nullptr) {
+    if (frontend->sources.gsf_from_extnav_and_flow_enabled()) {
+        // exit immediately if no yaw estimator
+        if (yawEstimator5 == nullptr) {
+            return;
+        }
+
+#if EK3_FEATURE_EXTERNAL_NAV
+        // ensure external nav is configured for horizontal position
+        if (frontend->sources.getPosXYSource(core_index) != AP_NavEKF_Source::SourceXY::EXTNAV) {
+            return;
+        }
+#else
+        return;
+#endif
+
+#if EK3_FEATURE_OPTFLOW_FUSION
+        // ensure optical flow is configured as a horizontal velocity source
+        if (!frontend->sources.useVelXYSource(AP_NavEKF_Source::SourceXY::OPTFLOW, core_index)) {
+            return;
+        }
+#else
+        return;
+#endif
+        // true airspeed not used by this estimator
+        yawEstimator5->update(imuDataDelayed.delAng, imuDataDelayed.delVel, imuDataDelayed.delAngDT, imuDataDelayed.delVelDT, EKFGSF_run_filterbank, 0.0f);
         return;
     }
+    else {
+        // exit immediately if no yaw estimator
+        if (yawEstimator == nullptr) {
+            return;
+        }
+        if (frontend->sources.getPosXYSource(core_index) != AP_NavEKF_Source::SourceXY::GPS ||
+            !frontend->sources.useVelXYSource(AP_NavEKF_Source::SourceXY::GPS, core_index)) {
+            return;
+        }
 
-    // ensure GPS is used for horizontal position and velocity
-    if (frontend->sources.getPosXYSource(core_index) != AP_NavEKF_Source::SourceXY::GPS ||
-        !frontend->sources.useVelXYSource(AP_NavEKF_Source::SourceXY::GPS, core_index)) {
-        return;
+        ftype trueAirspeed;
+        if (tasDataDelayed.allowFusion && assume_zero_sideslip()) {
+            trueAirspeed = MAX(tasDataDelayed.tas, 0.0f);
+        } else {
+            trueAirspeed = 0.0f;
+        }
+        yawEstimator->update(imuDataDelayed.delAng, imuDataDelayed.delVel, imuDataDelayed.delAngDT, imuDataDelayed.delVelDT, EKFGSF_run_filterbank, trueAirspeed);
     }
-
-    ftype trueAirspeed;
-    if (tasDataDelayed.allowFusion && assume_zero_sideslip()) {
-        trueAirspeed = MAX(tasDataDelayed.tas, 0.0f);
-    } else {
-        trueAirspeed = 0.0f;
-    }
-    yawEstimator->update(imuDataDelayed.delAng, imuDataDelayed.delVel, imuDataDelayed.delAngDT, imuDataDelayed.delVelDT, EKFGSF_run_filterbank, trueAirspeed);
 }
 
 void NavEKF3_core::runYawEstimatorCorrection()
 {
-    // exit immediately if no yaw estimator
-    if (yawEstimator == nullptr) {
+    if (!frontend->sources.gsf_from_extnav_and_flow_enabled()) {
+        // exit immediately if no yaw estimator
+        if (yawEstimator == nullptr) {
+            return;
+        }
+        // ensure GPS is used for horizontal position and velocity
+        if (frontend->sources.getPosXYSource(core_index) != AP_NavEKF_Source::SourceXY::GPS ||
+            !frontend->sources.useVelXYSource(AP_NavEKF_Source::SourceXY::GPS, core_index)) {
+            return;
+        }
+
+        if (EKFGSF_run_filterbank) {
+            if (gpsDataToFuse) {
+                Vector2F gpsVelNE = Vector2F(gpsDataDelayed.vel.x, gpsDataDelayed.vel.y);
+                ftype gpsVelAcc = fmaxF(gpsSpdAccuracy, ftype(frontend->_gpsHorizVelNoise));
+                yawEstimator->fuseVelData(gpsVelNE, gpsVelAcc);
+
+                // after velocity data has been fused the yaw variance estimate will have been refreshed and
+                // is used maintain a history of validity
+                ftype gsfYaw, gsfYawVariance;
+                if (EKFGSF_getYaw(gsfYaw, gsfYawVariance)) {
+                    if (EKFGSF_yaw_valid_count <  GSF_YAW_VALID_HISTORY_THRESHOLD) {
+                        EKFGSF_yaw_valid_count++;
+                    }
+                } else {
+                    EKFGSF_yaw_valid_count = 0;
+                }
+            }
+
+            // action an external reset request
+            if (EKFGSF_yaw_reset_request_ms > 0 && imuSampleTime_ms - EKFGSF_yaw_reset_request_ms < YAW_RESET_TO_GSF_TIMEOUT_MS) {
+                EKFGSF_resetMainFilterYaw(true);
+            }
+        } else {
+            EKFGSF_yaw_valid_count = 0;
+        }
         return;
     }
-    // ensure GPS is used for horizontal position and velocity
-    if (frontend->sources.getPosXYSource(core_index) != AP_NavEKF_Source::SourceXY::GPS ||
-        !frontend->sources.useVelXYSource(AP_NavEKF_Source::SourceXY::GPS, core_index)) {
+
+    if (yawEstimator5 == nullptr) {
         return;
     }
+#if EK3_FEATURE_EXTERNAL_NAV
+    if (frontend->sources.getPosXYSource(core_index) != AP_NavEKF_Source::SourceXY::EXTNAV) {
+        return;
+    }
+#else
+    return;
+#endif
+
+
+#if EK3_FEATURE_OPTFLOW_FUSION
+    if (!frontend->sources.useVelXYSource(AP_NavEKF_Source::SourceXY::OPTFLOW, core_index)) {
+        return;
+    }
+#else
+    return;
+#endif
 
     if (EKFGSF_run_filterbank) {
-        if (gpsDataToFuse) {
-            Vector2F gpsVelNE = Vector2F(gpsDataDelayed.vel.x, gpsDataDelayed.vel.y);
-            ftype gpsVelAcc = fmaxF(gpsSpdAccuracy, ftype(frontend->_gpsHorizVelNoise));
-            yawEstimator->fuseVelData(gpsVelNE, gpsVelAcc);
+#if EK3_FEATURE_EXTERNAL_NAV
+        if (extNavDataToFuse) {
+            const Vector2F posNE = Vector2F(extNavDataDelayed.pos.x, extNavDataDelayed.pos.y);
+            const ftype posAcc = fmaxF(extNavDataDelayed.posErr, ftype(frontend->_gpsHorizPosNoise));
+            yawEstimator5->fusePosData(posNE, posAcc);
 
-            // after velocity data has been fused the yaw variance estimate will have been refreshed and
-            // is used maintain a history of validity
-            ftype gsfYaw, gsfYawVariance;
-            if (EKFGSF_getYaw(gsfYaw, gsfYawVariance)) {
-                if (EKFGSF_yaw_valid_count <  GSF_YAW_VALID_HISTORY_THRESHOLD) {
-                    EKFGSF_yaw_valid_count++;
-                }
-            } else {
-                EKFGSF_yaw_valid_count = 0;
+        }
+#endif
+
+#if EK3_FEATURE_OPTFLOW_FUSION
+        of_elements ofDataDelayed;
+        const bool flowDataToFuse = storedOF.recall(ofDataDelayed, imuDataDelayed.time_ms);
+        const bool tiltOK = (prevTnb.c.z > frontend->DCM33FlowMin);
+        if (flowDataToFuse && tiltOK) {
+            // height AGL estimate using EKF terrain state (same as main flow fusion)
+            const ftype pd = stateStruct.position.z;
+            ftype heightAboveGndEst = MAX((terrainState - pd), rngOnGnd);
+
+#if EK3_FEATURE_OPTFLOW_SRTM
+            terrain_srtm_alt_valid = ((imuSampleTime_ms - terrain_srtm_alt_ms) < 5000);
+            if (!gndOffsetValid && terrain_srtm_alt_valid) {
+                heightAboveGndEst = MAX((terrain_srtm_alt - pd), rngOnGnd);
             }
+#endif
+
+            // approximate height variance using vertical position variance
+            const ftype heightVar = fmaxF(P[9][9], sq(0.05f));
+
+            // approximate roll/pitch variances from the computed tilt error variance
+            Vector3F eulerAngles;
+            stateStruct.quat.to_euler(eulerAngles.x, eulerAngles.y, eulerAngles.z);
+            const ftype rollVar = 0.5f * tiltErrorVariance;
+            const ftype pitchVar = 0.5f * tiltErrorVariance;
+
+            const ftype flowRadAcc = fmaxF(ftype(frontend->_flowNoise), 0.05f);
+            const Vector3F posOffsetBody = ofDataDelayed.body_offset - accelPosOffset;
+            yawEstimator5->fuseOFData(ofDataDelayed.flowRadXYcomp,
+                                      flowRadAcc,
+                                      heightAboveGndEst,
+                                      heightVar,
+                                      eulerAngles.x,
+                                      rollVar,
+                                      eulerAngles.y,
+                                      pitchVar,
+                                      stateStruct.velocity.z,
+                                      ofDataDelayed.bodyRadXYZ,
+                                      posOffsetBody);
+        }
+#endif
+
+        // update yaw validity history
+        ftype gsfYaw, gsfYawVariance;
+        if (EKFGSF_getYaw(gsfYaw, gsfYawVariance)) {
+            if (EKFGSF_yaw_valid_count < GSF_YAW_VALID_HISTORY_THRESHOLD) {
+                EKFGSF_yaw_valid_count++;
+            }
+        } else {
+            EKFGSF_yaw_valid_count = 0;
         }
 
         // action an external reset request

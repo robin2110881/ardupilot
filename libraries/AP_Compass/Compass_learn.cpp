@@ -6,6 +6,7 @@
 #include <GCS_MAVLink/GCS.h>
 #include <AP_Vehicle/AP_Vehicle.h>
 #include <AP_NavEKF/EKFGSF_yaw.h>
+#include <AP_NavEKF/EKFGSF_yaw_5state.h>
 
 #if COMPASS_LEARN_ENABLED
 
@@ -39,7 +40,8 @@ void CompassLearn::update(void)
 
     const auto &ahrs = AP::ahrs();
     const auto *gsf = ahrs.get_yaw_estimator();
-    if (gsf == nullptr) {
+    const auto *gsf5 = ahrs.get_yaw_estimator5();
+    if (gsf == nullptr && gsf5 == nullptr) {
         // no GSF available
         return;
     }
@@ -54,7 +56,14 @@ void CompassLearn::update(void)
 
     ftype yaw_rad, yaw_variance;
     uint8_t n_clips;
-    if (!gsf->getYawData(yaw_rad, yaw_variance, &n_clips) ||
+    bool gsf_yaw_ok = false;
+    if (gsf != nullptr) {
+        gsf_yaw_ok = gsf->getYawData(yaw_rad, yaw_variance, &n_clips);
+    } else if (gsf5 != nullptr) {
+        gsf_yaw_ok = gsf5->getYawData(yaw_rad, yaw_variance, &n_clips);
+    }
+
+    if (!gsf_yaw_ok ||
         !is_positive(yaw_variance) ||
         n_clips > 1 ||
         yaw_variance >= sq(radians(YAW_ACCURACY_THRESHOLD_DEG))) {

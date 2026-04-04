@@ -35,6 +35,7 @@
 #include <AP_RangeFinder/AP_RangeFinder.h>
 
 #include "AP_NavEKF/EKFGSF_yaw.h"
+#include "AP_NavEKF/EKFGSF_yaw_5state.h"
 
 // GPS pre-flight check bit locations
 #define MASK_GPS_NSATS      (1<<0)
@@ -482,6 +483,7 @@ public:
 
     // get a yaw estimator instance
     const EKFGSF_yaw *get_yawEstimator(void) const { return yawEstimator; }
+    const EKFGSF_yaw_5state *get_yawEstimator5(void) const { return yawEstimator5; }
 
     // per-core pre-arm checks. returns false if we fail arming
     // checks, in which case the buffer will be populated with a
@@ -491,6 +493,7 @@ public:
     
 private:
     EKFGSF_yaw *yawEstimator;
+    EKFGSF_yaw_5state *yawEstimator5;
     AP_DAL &dal;
 
     // Reference to the global EKF frontend for parameters
@@ -1190,6 +1193,12 @@ private:
     bool tiltAlignComplete;         // true when tilt alignment is complete
     bool yawAlignComplete;          // true when yaw alignment is complete
     uint8_t yawAlignGpsValidCount;  // number of continuous good GPS velocity samples used for in flight yaw alignment
+#if EK3_FEATURE_EXTERNAL_NAV
+    Vector2F extNavCourseVelFilt;   // low-pass horizontal velocity estimate derived from ext-nav position changes
+    Vector2F extNavCourseLastPosNE; // previous ext-nav NE position sample used to form a velocity estimate
+    uint32_t extNavCourseLastTime_ms; // previous ext-nav sample time used to form a velocity estimate
+    bool extNavCourseFiltValid;     // true when ext-nav course LPF state has been initialised
+#endif
     bool magStateInitComplete;      // true when the magnetic field states have been initialised
     uint8_t stateIndexLim;          // Max state index used during matrix and array operations
     imu_elements imuDataDelayed;    // IMU data at the fusion time horizon

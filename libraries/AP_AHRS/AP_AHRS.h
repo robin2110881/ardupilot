@@ -42,6 +42,7 @@ class AP_AHRS_View;
 
 // fwd declare GSF estimator
 class EKFGSF_yaw;
+class EKFGSF_yaw_5state;
 
 class AP_AHRS {
     friend class AP_AHRS_View;
@@ -734,6 +735,7 @@ public:
 
     // get access to an EKFGSF_yaw estimator
     const EKFGSF_yaw *get_yaw_estimator(void) const;
+    const EKFGSF_yaw_5state *get_yaw_estimator5(void) const;
 
 private:
 
