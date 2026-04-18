@@ -81,20 +81,24 @@ struct PACKED log_KY1 {
 // @Field: IPE2: East position innovation from individual EKF filter 2 (m)
 // @Field: IPE3: East position innovation from individual EKF filter 3 (m)
 // @Field: IPE4: East position innovation from individual EKF filter 4 (m)
+// @Field: PN: North component of position measurement input to fusePosData (m)
+// @Field: PE: East component of position measurement input to fusePosData (m)
 struct PACKED log_KY2 {
-        LOG_PACKET_HEADER;
-        uint64_t time_us;
-        uint8_t core;
-        float ipn0;
-        float ipn1;
-        float ipn2;
-        float ipn3;
-        float ipn4;
-        float ipe0;
-        float ipe1;
-        float ipe2;
-        float ipe3;
-        float ipe4;
+    LOG_PACKET_HEADER;
+    uint64_t time_us;
+    uint8_t core;
+    float ipn0;
+    float ipn1;
+    float ipn2;
+    float ipn3;
+    float ipn4;
+    float ipe0;
+    float ipe1;
+    float ipe2;
+    float ipe3;
+    float ipe4;
+    float pin;
+    float pie;
 };
 
 #define KY0_FMT "QBffffffffffff"
@@ -107,10 +111,10 @@ struct PACKED log_KY2 {
 #define KY1_UNITS "s#nnnnnnnnnn"
 #define KY1_MULTS "F-0000000000"
 
-#define KY2_FMT "QBffffffffff"
-#define KY2_LABELS "TimeUS,C,IPN0,IPN1,IPN2,IPN3,IPN4,IPE0,IPE1,IPE2,IPE3,IPE4"
-#define KY2_UNITS "s#mmmmmmmmmm"
-#define KY2_MULTS "F-0000000000"
+#define KY2_FMT "QBffffffffffff"
+#define KY2_LABELS "TimeUS,C,IPN0,IPN1,IPN2,IPN3,IPN4,IPE0,IPE1,IPE2,IPE3,IPE4,PN,PE"
+#define KY2_UNITS "s#mmmmmmmmmmmm"
+#define KY2_MULTS "F-000000000000"
 
 #define LOG_STRUCTURE_FROM_NAVEKF                                       \
     { LOG_XKY0_MSG, sizeof(log_KY0),                                    \

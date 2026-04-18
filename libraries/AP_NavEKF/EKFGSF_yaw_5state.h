@@ -27,7 +27,8 @@ public:
     // Fuse NE position measurements (e.g. UWB) and update the EKF/GSF estimates
     // Should be called after update(...) whenever new position data is available
     void fusePosData(const Vector2F &pos,    // NE position measurement (m)
-                     const ftype posAcc);   // 1-sigma accuracy of position measurement (m)
+                     const ftype posAcc,    // 1-sigma accuracy of position measurement (m)
+                     const bool posReset=false); // true when the position source has reset/relocalized
 
     // Fuse optical flow line-of-sight (LOS) angular-rate measurements
     // using range computed from main EKF height and tilt (roll/pitch): rng = heightAGL / cosTilt.
@@ -83,14 +84,18 @@ private:
     const ftype EKFGSF_tiltGain{0.2};      // gain from tilt error to gyro correction for complementary filter (1/sec)
     const ftype EKFGSF_gyroBiasGain{0.04}; // gain applied to integral of gyro correction for complementary filter (1/sec)
     const ftype EKFGSF_accelFiltRatio{10.0}; // ratio  of time constant of AHRS tilt correction to time constant of first order LPF applied to accel data used by ahrs
+    const ftype EKFGSF_minSpeedVar{sq(0.005f)}; // minimum horizontal speed variance floor (m/s)^2
+    const ftype EKFGSF_minPosVar{sq(0.005f)};   // minimum horizontal position variance floor (m)^2
+    const ftype EKFGSF_defaultSeedSpeedVar{sq(4.0f)}; // fallback initial speed variance (m/s)^2
+    const ftype EKFGSF_defaultSeedPosVar{sq(4.0f)};   // fallback initial position variance (m)^2
 
     // Declarations used by the bank of AHRS complementary filters that use IMU data augmented by true
     // airspeed data when in fixed wing mode to estimate the quaternions that are used to rotate IMU data into a
     // Front, Right, Yaw frame of reference.
     Vector3F delta_angle;
     Vector3F delta_velocity;
-    ftype angle_dt;
-    ftype velocity_dt;
+    ftype angle_dt{};
+    ftype velocity_dt{};
     struct ahrs_struct {
         Matrix3F R;             // matrix that rotates a vector from body to earth frame
         Vector3F gyro_bias;     // gyro bias learned and used by the quaternion calculation
@@ -101,11 +106,11 @@ private:
         ftype accel_dt;         // time step used when generating _simple_accel_FR data (sec)
     };
     ahrs_struct AHRS[N_MODELS_EKFGSF];
-    bool ahrs_tilt_aligned;         // true the initial tilt alignment has been calculated
-    ftype accel_gain;               // gain from accel vector tilt error to rate gyro correction used by AHRS calculation
+    bool ahrs_tilt_aligned{false};  // true the initial tilt alignment has been calculated
+    ftype accel_gain{};             // gain from accel vector tilt error to rate gyro correction used by AHRS calculation
     Vector3F ahrs_accel;            // filtered body frame specific force vector used by AHRS calculation (m/s/s)
-    ftype ahrs_accel_norm;          // length of body frame specific force vector used by AHRS calculation (m/s/s)
-    ftype true_airspeed;            // true airspeed used to correct for centripetal acceleratoin in coordinated turns (m/s)
+    ftype ahrs_accel_norm{};        // length of body frame specific force vector used by AHRS calculation (m/s/s)
+    ftype true_airspeed{};          // true airspeed used to correct for centripetal acceleratoin in coordinated turns (m/s)
 
     // Runs quaternion prediction for the selected AHRS using IMU (and optionally true airspeed) data
     void predictAHRS(const uint8_t mdl_idx);
@@ -141,10 +146,13 @@ private:
     };
     
     EKF_struct EKF[N_MODELS_EKFGSF];
-    bool vel_fuse_running;  // true when the bank of EKF's has started fusing GPS velocity data
-    bool run_ekf_gsf;       // true when operating condition is suitable for to run the GSF and EKF models and fuse velocity data
-    ftype pos_meas_dt;      // time delta used to convert position innovation to a velocity proxy (sec)
-    uint32_t last_pos_fuse_ms; // timestamp of last successful position fusion (ms)
+    bool vel_fuse_running{false};  // true when the bank of EKF's has started fusing GPS velocity data
+    bool run_ekf_gsf{false};       // true when operating condition is suitable for to run the GSF and EKF models and fuse velocity data
+    ftype pos_meas_dt{1.0f};       // time delta used to convert position innovation to a velocity proxy (sec)
+    uint32_t last_pos_fuse_ms{};   // timestamp of last successful position fusion (ms)
+    Vector2F last_pos_meas;        // most recent external position measurement used for startup/reseed (m)
+    ftype last_pos_obs_var{sq(1.0f)}; // most recent horizontal position observation variance (m)^2
+    bool have_pos_meas{false};     // true when at least one position measurement has been received
 
     // Resets states and covariances for the EKF's and GSF including GSF weights, but not the AHRS complementary filters.
     void resetEKFGSF();

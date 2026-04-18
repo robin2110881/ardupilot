@@ -20,10 +20,34 @@
 
 #include "AP_NavEKF/EKFGSF_yaw_5state.h"
 #include <AP_AHRS/AP_AHRS.h>
+#include <GCS_MAVLink/GCS.h>
+
+namespace {
+void notify_weight_reset(const char *src, const uint8_t n_clips)
+{
+    static uint32_t last_msg_ms;
+    const uint32_t now_ms = AP_HAL::millis();
+    if ((now_ms - last_msg_ms) < 1000U) {
+        return;
+    }
+    last_msg_ms = now_ms;
+    GCS_SEND_TEXT(MAV_SEVERITY_INFO, "EKFGSF5 weight reset (%s,clip=%u)", src, (unsigned)n_clips);
+}
+}
 
 EKFGSF_yaw_5state::EKFGSF_yaw_5state()
 {
-    n_clips = 0;
+    for (uint8_t mdl_idx = 0; mdl_idx < N_MODELS_EKFGSF; mdl_idx++) {
+        AHRS[mdl_idx].gyro_bias.zero();
+        AHRS[mdl_idx].aligned = false;
+        AHRS[mdl_idx].accel_FR[0] = 0.0f;
+        AHRS[mdl_idx].accel_FR[1] = 0.0f;
+        AHRS[mdl_idx].vel_NE[0] = 0.0f;
+        AHRS[mdl_idx].vel_NE[1] = 0.0f;
+        AHRS[mdl_idx].fuse_gps = false;
+        AHRS[mdl_idx].accel_dt = 0.0f;
+    }
+    resetEKFGSF();
 }
 
 ftype EKFGSF_yaw_5state::gaussianDensity(const uint8_t mdl_idx) const
@@ -171,14 +195,65 @@ void EKFGSF_yaw_5state::fuseOFData(const Vector2F &flowRadXYcomp,
     if (run_ekf_gsf) {
         if (!vel_fuse_running) {
             resetEKFGSF();
+
+            // Seed model position from the latest position-source sample when available.
             for (uint8_t mdl_idx = 0; mdl_idx < N_MODELS_EKFGSF; mdl_idx++) {
-                // Start from a neutral velocity hypothesis but with non-zero uncertainty.
-                EKF[mdl_idx].X[0] = 0.0f;
-                EKF[mdl_idx].X[1] = 0.0f;
-                EKF[mdl_idx].P[0][0] = sq(5.0f);
-                EKF[mdl_idx].P[1][1] = sq(5.0f);
+                if (have_pos_meas) {
+                    EKF[mdl_idx].X[3] = last_pos_meas[0];
+                    EKF[mdl_idx].X[4] = last_pos_meas[1];
+                    EKF[mdl_idx].P[3][3] = fmaxF(last_pos_obs_var, EKFGSF_minPosVar);
+                    EKF[mdl_idx].P[4][4] = fmaxF(last_pos_obs_var, EKFGSF_minPosVar);
+                } else {
+                    EKF[mdl_idx].P[3][3] = EKFGSF_defaultSeedPosVar;
+                    EKF[mdl_idx].P[4][4] = EKFGSF_defaultSeedPosVar;
+                }
             }
+
+            // Align AHRS yaw for each model before deriving velocity from flow and yaw hypotheses.
             alignYaw();
+
+            const ftype inv_rng = 1.0f / rng;
+            const ftype sroll = sinF(roll);
+            const ftype spitch = sinF(pitch);
+            const ftype cpitch = cosF(pitch);
+            const ftype p_rate = bodyRates[0];
+            const ftype q_rate = bodyRates[1];
+            const ftype r_rate = bodyRates[2];
+            const ftype rx = sensorOffsetBody[0];
+            const ftype ry = sensorOffsetBody[1];
+            const ftype rz = sensorOffsetBody[2];
+
+            // Remove non-horizontal-velocity terms from the optical-flow observation.
+            const ftype flow_x_bias = inv_rng * (sroll * cpitch * vD - p_rate * rz + r_rate * rx);
+            const ftype flow_y_bias = inv_rng * (spitch * vD - q_rate * rz + r_rate * ry);
+            const ftype meas_x = flowRadXYcomp[0] - flow_x_bias;
+            const ftype meas_y = flowRadXYcomp[1] - flow_y_bias;
+
+            // Convert LOS rates to an approximate sensor-frame horizontal velocity.
+            // The flow inputs are body-rate compensated, so this keeps startup simple and robust.
+            const ftype cpitch_limited = fmaxF(cpitch, 0.1f);
+            const ftype vel_body_x = -meas_y * rng / cpitch_limited;
+            const ftype vel_body_y =  meas_x * rng;
+            const ftype vel_seed_var = fmaxF(flowObsVar * sq(rng), EKFGSF_minSpeedVar);
+
+            for (uint8_t mdl_idx = 0; mdl_idx < N_MODELS_EKFGSF; mdl_idx++) {
+                // Project the sensor-frame startup velocity into N/E using each yaw hypothesis.
+                ftype vel_seed_n = 0.0f;
+                ftype vel_seed_e = 0.0f;
+
+                const ftype psi = EKF[mdl_idx].X[2];
+                const ftype cpsi = cosF(psi);
+                const ftype spsi = sinF(psi);
+
+                vel_seed_n = cpsi * vel_body_x - spsi * vel_body_y;
+                vel_seed_e = spsi * vel_body_x + cpsi * vel_body_y;
+
+                EKF[mdl_idx].X[0] = vel_seed_n;
+                EKF[mdl_idx].X[1] = vel_seed_e;
+                EKF[mdl_idx].P[0][0] = vel_seed_var;
+                EKF[mdl_idx].P[1][1] = vel_seed_var;
+            }
+
             vel_fuse_running = true;
         } else {
             ftype total_w = 0.0f;
@@ -206,6 +281,7 @@ void EKFGSF_yaw_5state::fuseOFData(const Vector2F &flowRadXYcomp,
                         GSF.weights[mdl_idx] = newWeight[mdl_idx] * total_w_inv;
                     }
                 } else {
+                    notify_weight_reset("OF", n_clips);
                     resetEKFGSF();
                 }
             }
@@ -213,21 +289,36 @@ void EKFGSF_yaw_5state::fuseOFData(const Vector2F &flowRadXYcomp,
     }
 }
 
-void EKFGSF_yaw_5state::fusePosData(const Vector2F &pos, const ftype posAcc)
+void EKFGSF_yaw_5state::fusePosData(const Vector2F &pos, const ftype posAcc, const bool posReset)
 {
+    // Convert provided position accuracy directly to observation variance.
+    const ftype posObsVar = sq(fmaxF(posAcc, 0.01f));
+
+    // Keep the latest position sample for startup/reseed of the model bank.
+    last_pos_meas = pos;
+    last_pos_obs_var = posObsVar;
+    have_pos_meas = true;
+
     const uint32_t now_ms = AP_HAL::millis();
+
+    // Handle source relocalisation/reset by explicitly reseeding model position states.
+    if (run_ekf_gsf && vel_fuse_running && posReset) {
+        for (uint8_t mdl_idx = 0; mdl_idx < N_MODELS_EKFGSF; mdl_idx++) {
+            EKF[mdl_idx].X[3] = pos[0];
+            EKF[mdl_idx].X[4] = pos[1];
+            EKF[mdl_idx].P[3][3] = fmaxF(posObsVar, EKFGSF_minPosVar);
+            EKF[mdl_idx].P[4][4] = fmaxF(posObsVar, EKFGSF_minPosVar);
+        }
+        last_pos_fuse_ms = now_ms;
+        return;
+    }
+
     if (last_pos_fuse_ms > 0) {
         // Expected external-nav position rates are typically 8-30Hz.
         pos_meas_dt = fminF(fmaxF(1.0e-3f * (now_ms - last_pos_fuse_ms), 0.03f), 2.0f);
     } else {
         pos_meas_dt = 1.0f;
     }
-
-    // enforce a velocity-equivalent floor like the 3-state GSF (0.5 m/s).
-    const ftype pos_sigma_from_input = fmaxF(posAcc, 1.0e-3f);
-    const ftype vel_sigma_floor = 0.5f;
-    const ftype pos_sigma_floor = vel_sigma_floor * pos_meas_dt;
-    const ftype posObsVar = sq(fmaxF(pos_sigma_from_input, pos_sigma_floor));
 
     if (run_ekf_gsf && vel_fuse_running) {
         bool state_update_failed = false;
@@ -255,6 +346,7 @@ void EKFGSF_yaw_5state::fusePosData(const Vector2F &pos, const ftype posAcc)
                     GSF.weights[mdl_idx] = newWeight[mdl_idx] * total_w_inv;
                 }
             } else {
+                notify_weight_reset("POS", n_clips);
                 resetEKFGSF();
             }
             last_pos_fuse_ms = now_ms;
@@ -501,27 +593,27 @@ void EKFGSF_yaw_5state::predict(const uint8_t mdl_idx)
     Pp[3][4] = P04*dt + P34 - dt*p20 + dt*(P01*dt + P13 - dt*p17) + p15*p33 - p16*p33 + p31*p34;
     Pp[4][4] = P14*dt + P44 + dt*p30 + dt*(P11*dt + P14 + dt*p27) + p22*p33 + p23*p33 + p32*p34;
 
-    const ftype min_var = 1e-6f;
+    const ftype min_yaw_var = 1e-6f;
     // Copy predicted covariance into P (fill both triangles)
-    EKF[mdl_idx].P[0][0] = fmaxF(Pp[0][0], min_var);
+    EKF[mdl_idx].P[0][0] = fmaxF(Pp[0][0], EKFGSF_minSpeedVar);
     EKF[mdl_idx].P[0][1] = EKF[mdl_idx].P[1][0] = Pp[0][1];
     EKF[mdl_idx].P[0][2] = EKF[mdl_idx].P[2][0] = Pp[0][2];
     EKF[mdl_idx].P[0][3] = EKF[mdl_idx].P[3][0] = Pp[0][3];
     EKF[mdl_idx].P[0][4] = EKF[mdl_idx].P[4][0] = Pp[0][4];
 
-    EKF[mdl_idx].P[1][1] = fmaxF(Pp[1][1], min_var);
+    EKF[mdl_idx].P[1][1] = fmaxF(Pp[1][1], EKFGSF_minSpeedVar);
     EKF[mdl_idx].P[1][2] = EKF[mdl_idx].P[2][1] = Pp[1][2];
     EKF[mdl_idx].P[1][3] = EKF[mdl_idx].P[3][1] = Pp[1][3];
     EKF[mdl_idx].P[1][4] = EKF[mdl_idx].P[4][1] = Pp[1][4];
 
-    EKF[mdl_idx].P[2][2] = fmaxF(Pp[2][2], min_var);
+    EKF[mdl_idx].P[2][2] = fmaxF(Pp[2][2], min_yaw_var);
     EKF[mdl_idx].P[2][3] = EKF[mdl_idx].P[3][2] = Pp[2][3];
     EKF[mdl_idx].P[2][4] = EKF[mdl_idx].P[4][2] = Pp[2][4];
 
-    EKF[mdl_idx].P[3][3] = fmaxF(Pp[3][3], min_var);
+    EKF[mdl_idx].P[3][3] = fmaxF(Pp[3][3], EKFGSF_minPosVar);
     EKF[mdl_idx].P[3][4] = EKF[mdl_idx].P[4][3] = Pp[3][4];
 
-    EKF[mdl_idx].P[4][4] = fmaxF(Pp[4][4], min_var);
+    EKF[mdl_idx].P[4][4] = fmaxF(Pp[4][4], EKFGSF_minPosVar);
 }
 
 bool EKFGSF_yaw_5state::correctOF(const uint8_t mdl_idx,
@@ -857,10 +949,11 @@ bool EKFGSF_yaw_5state::correctOF(const uint8_t mdl_idx,
 
     EKF[mdl_idx].P[4][4] = Pnew_flow[4][4];
 
-    const ftype min_var = 1e-6f;
-    for (uint8_t i = 0; i < 5; i++) {
-        EKF[mdl_idx].P[i][i] = fmaxF(EKF[mdl_idx].P[i][i], min_var);
-    }
+    EKF[mdl_idx].P[0][0] = fmaxF(EKF[mdl_idx].P[0][0], EKFGSF_minSpeedVar);
+    EKF[mdl_idx].P[1][1] = fmaxF(EKF[mdl_idx].P[1][1], EKFGSF_minSpeedVar);
+    EKF[mdl_idx].P[2][2] = fmaxF(EKF[mdl_idx].P[2][2], 1e-6f);
+    EKF[mdl_idx].P[3][3] = fmaxF(EKF[mdl_idx].P[3][3], EKFGSF_minPosVar);
+    EKF[mdl_idx].P[4][4] = fmaxF(EKF[mdl_idx].P[4][4], EKFGSF_minPosVar);
 
     return true;
 }
@@ -1031,10 +1124,11 @@ bool EKFGSF_yaw_5state::correctPos(const uint8_t mdl_idx, const Vector2F &pos, c
     EKF[mdl_idx].P[3][4] = EKF[mdl_idx].P[4][3] = Pnew_pos[3][4];
     EKF[mdl_idx].P[4][4] = Pnew_pos[4][4];
 
-    const ftype min_var = 1e-6f;
-    for (uint8_t i = 0; i < 5; i++) {
-        EKF[mdl_idx].P[i][i] = fmaxF(EKF[mdl_idx].P[i][i], min_var);
-    }
+    EKF[mdl_idx].P[0][0] = fmaxF(EKF[mdl_idx].P[0][0], EKFGSF_minSpeedVar);
+    EKF[mdl_idx].P[1][1] = fmaxF(EKF[mdl_idx].P[1][1], EKFGSF_minSpeedVar);
+    EKF[mdl_idx].P[2][2] = fmaxF(EKF[mdl_idx].P[2][2], 1e-6f);
+    EKF[mdl_idx].P[3][3] = fmaxF(EKF[mdl_idx].P[3][3], EKFGSF_minPosVar);
+    EKF[mdl_idx].P[4][4] = fmaxF(EKF[mdl_idx].P[4][4], EKFGSF_minPosVar);
 
     return true;
 }

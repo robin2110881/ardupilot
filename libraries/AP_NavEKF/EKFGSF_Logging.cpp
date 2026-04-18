@@ -110,6 +110,8 @@ void EKFGSF_yaw_5state::Log_Write(uint64_t time_us, LogMessages id0, LogMessages
         ipe2                    : EKF[2].innov_pos[1],
         ipe3                    : EKF[3].innov_pos[1],
         ipe4                    : EKF[4].innov_pos[1],
+        pin                     : last_pos_meas[0],
+        pie                     : last_pos_meas[1],
     };
     AP::logger().WriteBlock(&ky2, sizeof(ky2));
 }

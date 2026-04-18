@@ -938,9 +938,13 @@ void NavEKF3_core::runYawEstimatorCorrection()
     if (EKFGSF_run_filterbank) {
 #if EK3_FEATURE_EXTERNAL_NAV
         if (extNavDataToFuse) {
-            const Vector2F posNE = Vector2F(extNavDataDelayed.pos.x, extNavDataDelayed.pos.y);
-            const ftype posAcc = fmaxF(extNavDataDelayed.posErr, ftype(frontend->_gpsHorizPosNoise));
-            yawEstimator5->fusePosData(posNE, posAcc);
+            // Keep the GSF position fusion in a fixed frame to avoid discontinuities when EKF_origin moves.
+            // extNavDataDelayed.pos is in EKF-origin frame after correction; convert back to public-origin frame.
+            const Vector2F ekf_to_public = EKF_origin.get_distance_NE_ftype(public_origin);
+            const Vector2F posNE = Vector2F(extNavDataDelayed.pos.x, extNavDataDelayed.pos.y) - ekf_to_public;
+            // AP_VisualOdom clamps reported posErr using VISO_POS_M_NSE;
+            const ftype posAcc = extNavDataDelayed.posErr;
+            yawEstimator5->fusePosData(posNE, posAcc, extNavDataDelayed.posReset);
 
         }
 #endif
