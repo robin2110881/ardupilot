@@ -8,15 +8,16 @@ SITL :
 3. Change EKF source params : change EK3_SRC1_ : POSXY to 8, POSZ to 2, VELXY to 5, VELZ to 0, YAW to 8.
 4. Change to use EK3 5 state : EK3_SRC_OPTIONS to 16 (bit 4 to 1) 
 5. Change VISO_OPTION to 1 to bypass the attitude reading from the vision_position_estimate messages
+6. I did set TERRAIN_ENABLE and TERRAIN_SIM to solve rangefinder not following the true altitude. This might be due to my lack of understanding of this feature, this issue is to dig
 
 You can now lanch a program like this one to send horizontal position from gazebo to simulate a cheap position sensor, and to send startup yaw alignement (by pressing 'r' then enter), also you will need to set ekf origin by pressing 'o' : 
-
 
 import os
 import time
 import traceback
 import math
 import argparse
+import numpy as np
 
 from gz.transport13 import Node
 from gz.msgs10.pose_v_pb2 import Pose_V
@@ -30,18 +31,78 @@ from pymavlink import mavutil
 LATITUDE_HOME = -31.9508512 # Latitude HOME en deg
 LONGITUDE_HOME = 115.863278 # Longitude HOME en deg
 ALTITUDE_HOME = 10 # Altitude HOME en m
+SEND_ATT = False
+SEND_Z = False
+SIGMA_POS = 0.2 # Sigma pour la position en m
 
 # Matrice de covariance (upper-triangular 6x6, must stay finite values for ArduPilot)
 POSE_COV = [0.0 for _ in range(21)]
-# Position sigma = 0.1m
-POSE_COV[0] = 0.1**2   # x
-POSE_COV[6] = 0.1**2   # y
+# Position sigma = 0.2m
+POSE_COV[0] = SIGMA_POS**2   # x
+POSE_COV[6] = SIGMA_POS**2   # y
+POSE_COV[11] = SIGMA_POS**2   # z
 
 POSE_TOPIC = "/world/iris_runway/dynamic_pose/info" # Topic Gazebo des positions
 
 ODOMETRY_RATE = 12 # 12 Hz
 
 SOURCE_COMPONENT = mavutil.mavlink.MAV_COMP_ID_VISUAL_INERTIAL_ODOMETRY
+
+
+def quat_to_rotmat(qw: float, qx: float, qy: float, qz: float) -> np.ndarray:
+    """Quaternion (w, x, y, z) -> rotation matrix (body to world)."""
+    n = math.sqrt(qw * qw + qx * qx + qy * qy + qz * qz)
+    if n <= 0.0:
+        return np.eye(3)
+    qw, qx, qy, qz = qw / n, qx / n, qy / n, qz / n
+
+    return np.array([
+        [1.0 - 2.0 * (qy * qy + qz * qz), 2.0 * (qx * qy - qz * qw), 2.0 * (qx * qz + qy * qw)],
+        [2.0 * (qx * qy + qz * qw), 1.0 - 2.0 * (qx * qx + qz * qz), 2.0 * (qy * qz - qx * qw)],
+        [2.0 * (qx * qz - qy * qw), 2.0 * (qy * qz + qx * qw), 1.0 - 2.0 * (qx * qx + qy * qy)],
+    ])
+
+
+def wrap_pi(angle: float) -> float:
+    return (angle + math.pi) % (2.0 * math.pi) - math.pi
+
+
+def rotmat_to_euler321(R: np.ndarray) -> tuple[float, float, float]:
+    """Rotation matrix (body->world) to roll, pitch, yaw using 3-2-1 convention."""
+    # Clamp protects against tiny numeric overshoots.
+    pitch = -math.asin(max(-1.0, min(1.0, R[2, 0])))
+    roll = math.atan2(R[2, 1], R[2, 2])
+    yaw = math.atan2(R[1, 0], R[0, 0])
+    return roll, pitch, wrap_pi(yaw)
+
+
+def gazebo_quat_to_ap_rpy(qw: float, qx: float, qy: float, qz: float) -> tuple[float, float, float]:
+    """
+    Convert Gazebo model attitude to ArduPilot attitude.
+
+    Gazebo: world ENU, body FLU
+    ArduPilot: world NED, body FRD
+    """
+    # body(FLU) -> world(ENU)
+    R_enu_flu = quat_to_rotmat(qw, qx, qy, qz)
+
+    # World ENU -> NED
+    T_world = np.array([
+        [0.0, 1.0, 0.0],
+        [1.0, 0.0, 0.0],
+        [0.0, 0.0, -1.0],
+    ])
+
+    # Body FRD -> FLU
+    T_body = np.array([
+        [1.0, 0.0, 0.0],
+        [0.0, -1.0, 0.0],
+        [0.0, 0.0, -1.0],
+    ])
+
+    # body(FRD) -> world(NED)
+    R_ned_frd = T_world @ R_enu_flu @ T_body
+    return rotmat_to_euler321(R_ned_frd)
 
 def address_conn_from_id(drone_id: int):
     return f"127.0.0.1:{14552 + drone_id*10}"
@@ -76,7 +137,8 @@ mavutil.set_dialect("ardupilotmega")
 
 # Liste des ids (!= sysid) des drones disponibles
 DRONE_IDS: list[int] = []
-DRONE_IDS = [0]
+if WORLD == "1":
+    DRONE_IDS = [0]
 
 # COnnexion MAVLink
 def conn_with_drone(drone_id: int) -> mavutil.mavfile:
@@ -88,7 +150,9 @@ def conn_with_drone(drone_id: int) -> mavutil.mavfile:
     Returns:
         mavutil.mavfile: Connexion MAVLink
     """
-    sysid = 11
+    if drone_id <= 4:
+        sysid = drone_id + 11
+
     master = mavutil.mavlink_connection(
         device=address_conn_from_id(drone_id=drone_id),
         source_system=sysid,
@@ -108,6 +172,8 @@ class Position:
         self._x = 0
         self._y = 0
         self._z = 0
+        self.roll = 0.0
+        self.pitch = 0.0
         self.yaw = 0.0
         self.time_received = 0
 
@@ -122,6 +188,7 @@ class Position:
     @property
     def z(self):
         return round(self._z, 2)
+    
 
     @x.setter
     def x(self, other):
@@ -143,23 +210,23 @@ dict_pos: dict[str, Position] = {}
 for name in CONN_DICT:
     dict_pos[name] = Position()
 
-import numpy as np
 def pose_v_callback(msg) -> None:
     """Callback appelé à chaque message de type Pose_V reçu."""
     for pose in msg.pose:
         if pose.name in dict_pos:
-            dict_pos[pose.name].x = pose.position.x
-            dict_pos[pose.name].y = pose.position.y
-            dict_pos[pose.name].z = pose.position.z
-            # Convert Gazebo quaternion to yaw (rad)
+            # add noise to position to simulate real-world conditions
+            dict_pos[pose.name].x = pose.position.x + np.random.normal(0, SIGMA_POS)
+            dict_pos[pose.name].y = pose.position.y + np.random.normal(0, SIGMA_POS)
+            dict_pos[pose.name].z = pose.position.z + np.random.normal(0, SIGMA_POS)
+            # Convert Gazebo quaternion (ENU/FLU) to ArduPilot rpy (NED/FRD)
             qx = pose.orientation.x
             qy = pose.orientation.y
             qz = pose.orientation.z
             qw = pose.orientation.w
-            siny_cosp = 2.0 * (qw * qz + qx * qy)
-            cosy_cosp = 1.0 - 2.0 * (qy * qy + qz * qz)
-            # compute yaw and add small noise
-            dict_pos[pose.name].yaw =  - math.atan2(siny_cosp, cosy_cosp) + math.pi/2 * (1+np.random.normal(0, 0.12)) # Gazebo a une orientation différente de celle d'ArduPilot, on aligne les axes
+            roll, pitch, yaw = gazebo_quat_to_ap_rpy(qw, qx, qy, qz)
+            dict_pos[pose.name].roll = roll
+            dict_pos[pose.name].pitch = pitch
+            dict_pos[pose.name].yaw = yaw
             dict_pos[pose.name].time_received = time.time()
 
 
@@ -178,15 +245,24 @@ def send_odometry(conn_name: str):
     if not dict_pos[conn_name].is_valid():
         return
 
-    conn = CONN_DICT[conn_name]
-    z_ned = -dict_pos[conn_name].z
-    yaw = dict_pos[conn_name].yaw
-    if not (math.isfinite(z_ned) and math.isfinite(yaw)):
-        return
-    conn.mav.vision_position_estimate_send(
+    if SEND_ATT:
+        roll = dict_pos[conn_name].roll
+        pitch = dict_pos[conn_name].pitch
+        yaw = dict_pos[conn_name].yaw
+    else:
+        roll = 0.0
+        pitch = 0.0
+        yaw = 0.0
+
+    if SEND_Z:
+        z = dict_pos[conn_name].z
+    else:
+        z = 0.0
+
+    CONN_DICT[conn_name].mav.vision_position_estimate_send(
         int((time.time() - t_init) * 1e6),
-        dict_pos[conn_name].y, dict_pos[conn_name].x, z_ned,
-        0.0, 0.0, yaw,
+        dict_pos[conn_name].y, dict_pos[conn_name].x, -z,
+        roll, pitch, yaw,
         POSE_COV,
         0
     )
@@ -277,7 +353,7 @@ try:
             for conn_name in CONN_DICT:
                 print("Yaw align sent (with random noise)")
                 yaw = dict_pos[conn_name].yaw
-                sigma_rad = math.radians(10.0)
+                sigma_rad = math.radians(12.0)
                 yaw_var = sigma_rad * sigma_rad
                 for conn in CONN_DICT.values():
                     conn.mav.command_int_send(
@@ -287,7 +363,7 @@ try:
                         43006,   # AP_MAV_CMD_EXTERNAL_YAW_ESTIMATE (local)
                         0,       # current
                         0,       # autocontinue
-                        yaw, # param1
+                        yaw + np.random.normal(0, sigma_rad), # adding noise to yaw to simulate real-world conditions
                         yaw_var, # param2
                         0.0,     # param3 unused
                         0.0,     # param4 unused
